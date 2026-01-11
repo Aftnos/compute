@@ -85,7 +85,7 @@ class MainWindow(QMainWindow):
         self._startup_hotkey_input = QLineEdit()
         self._startup_hotkey_input.setReadOnly(True)
         self._startup_hotkey_set_button = QPushButton("设置热键")
-        self._startup_hotkey_add_button = QPushButton("继续添加")
+        self._startup_hotkey_add_button = QPushButton("重新录入")
         self._startup_schedule_type = QComboBox()
         self._startup_schedule_type.addItem("不启用", userData=None)
         self._startup_schedule_type.addItem("每日", userData="daily")
@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
         self._emergency_hotkey_input = QLineEdit()
         self._emergency_hotkey_input.setReadOnly(True)
         self._emergency_hotkey_set_button = QPushButton("设置热键")
-        self._emergency_hotkey_add_button = QPushButton("继续添加")
+        self._emergency_hotkey_add_button = QPushButton("重新录入")
         self._save_settings_button = QPushButton("保存设置")
 
         self._status_label = QLabel("就绪")
@@ -248,9 +248,9 @@ class MainWindow(QMainWindow):
         self._save_settings_button.clicked.connect(self._save_settings)
         self._log_path_button.clicked.connect(self._choose_log_path)
         self._startup_hotkey_set_button.clicked.connect(lambda: self._capture_hotkey("startup", append=False))
-        self._startup_hotkey_add_button.clicked.connect(lambda: self._capture_hotkey("startup", append=True))
+        self._startup_hotkey_add_button.clicked.connect(lambda: self._capture_hotkey("startup", append=False))
         self._emergency_hotkey_set_button.clicked.connect(lambda: self._capture_hotkey("emergency", append=False))
-        self._emergency_hotkey_add_button.clicked.connect(lambda: self._capture_hotkey("emergency", append=True))
+        self._emergency_hotkey_add_button.clicked.connect(lambda: self._capture_hotkey("emergency", append=False))
 
     def _register_emergency_hotkey(self) -> None:
         try:
@@ -611,8 +611,8 @@ class MainWindow(QMainWindow):
 
     def _apply_tooltips(self) -> None:
         self._startup_hotkey_input.setToolTip("通过按钮录入快捷键组合。")
-        self._startup_hotkey_set_button.setToolTip("点击后按键录入快捷键。")
-        self._startup_hotkey_add_button.setToolTip("继续添加一个按键到快捷键组合。")
+        self._startup_hotkey_set_button.setToolTip("点击后按下组合按键录入快捷键。")
+        self._startup_hotkey_add_button.setToolTip("重新录入组合按键。")
         self._startup_schedule_type.setToolTip("选择定时触发类型，未选择则不启用定时启动。")
         self._startup_schedule_expression.setToolTip(
             "每日格式：HH:MM；每周格式：mon,tue@HH:MM；Cron：标准 crontab 表达式。"
@@ -624,8 +624,8 @@ class MainWindow(QMainWindow):
         self._browser_user_data_input.setToolTip("Chrome 用户数据目录，可复用登录态。")
         self._browser_profile_input.setToolTip("Chrome Profile 目录，例如：Default。")
         self._emergency_hotkey_input.setToolTip("紧急停止热键，默认 ctrl,alt,esc。")
-        self._emergency_hotkey_set_button.setToolTip("点击后按键录入紧急停止热键。")
-        self._emergency_hotkey_add_button.setToolTip("继续添加一个按键到紧急停止组合。")
+        self._emergency_hotkey_set_button.setToolTip("点击后按下组合按键录入紧急停止热键。")
+        self._emergency_hotkey_add_button.setToolTip("重新录入组合按键。")
 
     def _run_startup_flows(self, trigger: str) -> None:
         flows = [flow for flow in self._flows if flow.flow_id in self._settings.startup_flow_ids]
@@ -668,7 +668,7 @@ class MainWindow(QMainWindow):
         self._emergency_hotkey_input.setText(",".join(self._emergency_hotkey_keys))
 
     def _capture_hotkey(self, target: str, append: bool) -> None:
-        current = []
+        current: List[str] = []
         if append:
             current = list(self._startup_hotkey_keys if target == "startup" else self._emergency_hotkey_keys)
         dialog = HotkeyCaptureDialog(current, parent=self)
@@ -686,11 +686,11 @@ class HotkeyCaptureDialog(QDialog):
         self.setWindowTitle("录入快捷键")
         self._keys = list(keys)
         self._capture_enabled = True
-        self._info_label = QLabel("请按下一个按键（可点击“继续添加”录入更多按键）")
+        self._info_label = QLabel("请按下组合按键（例如：ctrl + alt + s）")
         self._key_display = QLineEdit()
         self._key_display.setReadOnly(True)
         self._key_display.setText(",".join(self._keys))
-        self._add_button = QPushButton("继续添加")
+        self._add_button = QPushButton("重新录入")
         self._clear_button = QPushButton("清空")
         self._save_button = QPushButton("确定")
         self._cancel_button = QPushButton("取消")
@@ -720,7 +720,9 @@ class HotkeyCaptureDialog(QDialog):
 
     def _enable_capture(self) -> None:
         self._capture_enabled = True
-        self._info_label.setText("请按下一个按键以继续添加。")
+        self._keys = []
+        self._key_display.setText("")
+        self._info_label.setText("请按下组合按键以重新录入。")
         self.activateWindow()
 
     def _clear_keys(self) -> None:
@@ -731,15 +733,40 @@ class HotkeyCaptureDialog(QDialog):
         if not self._capture_enabled:
             super().keyPressEvent(event)
             return
-        key_text = self._key_to_name(event)
-        if key_text and key_text not in self._keys:
-            self._keys.append(key_text)
+        keys = self._build_combo_keys(event)
+        if keys:
+            self._keys = keys
             self._key_display.setText(",".join(self._keys))
-        self._capture_enabled = False
-        self._info_label.setText("已添加按键，可继续添加或点击确定。")
+            self._capture_enabled = False
+            self._info_label.setText("已录入组合按键，可点击确定。")
+        else:
+            self._info_label.setText("未识别到有效按键，请重试。")
 
-    def _key_to_name(self, event) -> str:
+    def _build_combo_keys(self, event) -> List[str]:
+        modifiers = event.modifiers()
+        keys: List[str] = []
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            keys.append("ctrl")
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            keys.append("alt")
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            keys.append("shift")
+        if modifiers & Qt.KeyboardModifier.MetaModifier:
+            keys.append("win")
         key = event.key()
+        if key in (
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Shift,
+            Qt.Key.Key_Meta,
+        ):
+            return keys
+        key_text = self._key_to_name(key, event.text())
+        if key_text:
+            keys.append(key_text)
+        return keys
+
+    def _key_to_name(self, key: int, text: str) -> str:
         mapping = {
             Qt.Key.Key_Control: "ctrl",
             Qt.Key.Key_Alt: "alt",
@@ -755,9 +782,9 @@ class HotkeyCaptureDialog(QDialog):
         }
         if key in mapping:
             return mapping[key]
-        text = event.text().strip().lower()
-        if text:
-            return text
+        text_value = text.strip().lower()
+        if text_value:
+            return text_value
         try:
             enum_name = Qt.Key(key).name
         except ValueError:
