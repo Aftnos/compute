@@ -20,7 +20,7 @@ class HotkeyManager:
 
     def register_hotkey(self, name: str, keys: List[str], callback: Callable[[], None]) -> None:
         if self._is_conflict(keys):
-            raise ValueError("Hotkey conflict detected")
+            raise ValueError("检测到热键冲突")
         self._bindings[name] = HotkeyBinding(name=name, keys=tuple(keys), callback=callback)
         self._refresh_listener()
 
