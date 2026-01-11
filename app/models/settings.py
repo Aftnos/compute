@@ -14,6 +14,7 @@ class AppSettings:
     browser_user_data_dir: Optional[str] = None
     browser_profile_dir: Optional[str] = None
     startup_hotkey: List[str] = field(default_factory=list)
+    emergency_hotkey: List[str] = field(default_factory=list)
     startup_schedule: Optional[ScheduleTrigger] = None
     startup_flow_ids: List[str] = field(default_factory=list)
 
@@ -33,6 +34,7 @@ class AppSettings:
             browser_user_data_dir=payload.get("browser_user_data_dir"),
             browser_profile_dir=payload.get("browser_profile_dir"),
             startup_hotkey=list(payload.get("startup_hotkey", [])),
+            emergency_hotkey=list(payload.get("emergency_hotkey", [])),
             startup_schedule=schedule,
             startup_flow_ids=list(payload.get("startup_flow_ids", [])),
         )
@@ -45,6 +47,7 @@ class AppSettings:
             "browser_user_data_dir": self.browser_user_data_dir,
             "browser_profile_dir": self.browser_profile_dir,
             "startup_hotkey": self.startup_hotkey,
+            "emergency_hotkey": self.emergency_hotkey,
             "startup_schedule": {
                 "type": self.startup_schedule.schedule_type,
                 "expression": self.startup_schedule.expression,

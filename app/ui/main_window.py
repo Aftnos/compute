@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self._browser_headless_check = QCheckBox("默认无头模式")
         self._browser_user_data_input = QLineEdit()
         self._browser_profile_input = QLineEdit()
+        self._emergency_hotkey_input = QLineEdit()
         self._save_settings_button = QPushButton("保存设置")
 
         self._status_label = QLabel("就绪")
@@ -177,8 +178,14 @@ class MainWindow(QMainWindow):
         browser_layout.addRow("Profile 目录", self._browser_profile_input)
         browser_group.setLayout(browser_layout)
 
+        hotkey_group = QGroupBox("紧急停止热键")
+        hotkey_layout = QFormLayout()
+        hotkey_layout.addRow("热键(逗号分隔)", self._emergency_hotkey_input)
+        hotkey_group.setLayout(hotkey_layout)
+
         settings_layout.addWidget(log_group)
         settings_layout.addWidget(browser_group)
+        settings_layout.addWidget(hotkey_group)
         settings_layout.addWidget(self._save_settings_button)
         settings_layout.addStretch()
         settings_panel.setLayout(settings_layout)
@@ -223,7 +230,9 @@ class MainWindow(QMainWindow):
 
     def _register_emergency_hotkey(self) -> None:
         try:
-            self._hotkeys.register_hotkey("emergency_stop", DEFAULT_HOTKEY, self._stop_run)
+            self._hotkeys.unregister_hotkey("emergency_stop")
+            hotkey = self._settings.emergency_hotkey or DEFAULT_HOTKEY
+            self._hotkeys.register_hotkey("emergency_stop", hotkey, self._stop_run)
         except ValueError:
             QMessageBox.warning(self, "热键冲突", "紧急停止热键发生冲突")
 
@@ -486,7 +495,9 @@ class MainWindow(QMainWindow):
         self._browser_headless_check.setChecked(self._settings.browser_headless)
         self._browser_user_data_input.setText(self._settings.browser_user_data_dir or "")
         self._browser_profile_input.setText(self._settings.browser_profile_dir or "")
+        self._emergency_hotkey_input.setText(",".join(self._settings.emergency_hotkey or DEFAULT_HOTKEY))
         self._startup_hotkey_input.setText(",".join(self._settings.startup_hotkey))
+        self._apply_tooltips()
         if self._settings.startup_schedule:
             index = self._startup_schedule_type.findData(
                 self._settings.startup_schedule.schedule_type, role=Qt.ItemDataRole.UserRole
@@ -505,6 +516,7 @@ class MainWindow(QMainWindow):
         self._logger = RunLogger(Path(self._settings.log_path))
         self._status_label.setText("设置已保存")
         self._apply_startup_triggers()
+        self._register_emergency_hotkey()
 
     def _read_settings_from_ui(self) -> AppSettings:
         startup_schedule = None
@@ -522,6 +534,7 @@ class MainWindow(QMainWindow):
             browser_user_data_dir=self._browser_user_data_input.text().strip() or None,
             browser_profile_dir=self._browser_profile_input.text().strip() or None,
             startup_hotkey=self._parse_hotkey(self._startup_hotkey_input.text()),
+            emergency_hotkey=self._parse_hotkey(self._emergency_hotkey_input.text()),
             startup_schedule=startup_schedule,
             startup_flow_ids=self._collect_startup_flow_ids(),
         )
@@ -570,6 +583,20 @@ class MainWindow(QMainWindow):
                     schedule.expression,
                     lambda: self._run_startup_flows(trigger="startup_schedule"),
                 )
+
+    def _apply_tooltips(self) -> None:
+        self._startup_hotkey_input.setToolTip("填写快捷键组合，例如：ctrl,alt,s。")
+        self._startup_schedule_type.setToolTip("选择定时触发类型，未选择则不启用定时启动。")
+        self._startup_schedule_expression.setToolTip(
+            "每日格式：HH:MM；每周格式：mon,tue@HH:MM；Cron：标准 crontab 表达式。"
+        )
+        self._startup_flow_list.setToolTip("勾选需要在启动热键或定时触发时执行的流程。")
+        self._log_path_input.setToolTip("日志输出文件路径，默认为 data/runs.jsonl。")
+        self._close_browser_check.setToolTip("取消勾选可在流程结束后保留浏览器实例。")
+        self._browser_headless_check.setToolTip("启用后使用无头模式启动浏览器。")
+        self._browser_user_data_input.setToolTip("Chrome 用户数据目录，可复用登录态。")
+        self._browser_profile_input.setToolTip("Chrome Profile 目录，例如：Default。")
+        self._emergency_hotkey_input.setToolTip("紧急停止热键，默认 ctrl,alt,esc。")
 
     def _run_startup_flows(self, trigger: str) -> None:
         flows = [flow for flow in self._flows if flow.flow_id in self._settings.startup_flow_ids]

@@ -157,6 +157,9 @@ class StepEditorDialog(QDialog):
         layout.addRow("间隔", interval_input)
         widget.setLayout(layout)
 
+        mode_combo.setToolTip("逐字输入适合普通文本，剪贴板粘贴适合大段文本。")
+        interval_input.setToolTip("每个字符之间的延迟，单位毫秒。")
+
         def getter() -> Dict[str, Any]:
             return {
                 "text": text_input.toPlainText(),
@@ -180,6 +183,8 @@ class StepEditorDialog(QDialog):
         layout.addRow("按键", key_input)
         widget.setLayout(layout)
 
+        key_input.setToolTip("示例：enter、tab、esc。")
+
         def getter() -> Dict[str, Any]:
             return {"key": key_input.text().strip()}
 
@@ -194,6 +199,8 @@ class StepEditorDialog(QDialog):
         keys_input = QLineEdit()
         layout.addRow("组合键(逗号分隔)", keys_input)
         widget.setLayout(layout)
+
+        keys_input.setToolTip("示例：ctrl,shift,s。")
 
         def getter() -> Dict[str, Any]:
             keys = [item.strip() for item in keys_input.text().split(",") if item.strip()]
@@ -228,10 +235,13 @@ class StepEditorDialog(QDialog):
         layout.addRow(capture_hint)
         widget.setLayout(layout)
 
+        capture_button.setToolTip("点击后最小化窗口，在屏幕上选择坐标。")
+        capture_hint.setToolTip("提示信息：捕获坐标后会自动恢复窗口。")
+
         def start_capture() -> None:
             self._capture_targets = (x_input, y_input, capture_hint)
             capture_hint.setText("请在屏幕上点击目标位置...")
-            self.hide()
+            self.setWindowState(Qt.WindowState.WindowMinimized)
             self._click_capture.start()
 
         capture_button.clicked.connect(start_capture)
@@ -279,6 +289,9 @@ class StepEditorDialog(QDialog):
 
         position_checkbox.stateChanged.connect(toggle_position)
 
+        position_checkbox.setToolTip("勾选后指定滚动位置，否则使用当前鼠标位置。")
+        delta_input.setToolTip("正数向上滚动，负数向下滚动。")
+
         def getter() -> Dict[str, Any]:
             params: Dict[str, Any] = {"delta": delta_input.value()}
             if position_checkbox.isChecked():
@@ -306,6 +319,8 @@ class StepEditorDialog(QDialog):
         layout.addRow("等待时间", ms_input)
         widget.setLayout(layout)
 
+        ms_input.setToolTip("等待指定毫秒数后继续执行下一步。")
+
         def getter() -> Dict[str, Any]:
             return {"ms": ms_input.value()}
 
@@ -320,6 +335,8 @@ class StepEditorDialog(QDialog):
         title_input = QLineEdit()
         layout.addRow("窗口标题包含", title_input)
         widget.setLayout(layout)
+
+        title_input.setToolTip("填写窗口标题关键字以激活对应窗口。")
 
         def getter() -> Dict[str, Any]:
             return {"title_contains": title_input.text().strip()}
@@ -413,6 +430,11 @@ class StepEditorDialog(QDialog):
         layout.addRow("Profile 目录", profile_input)
         widget.setLayout(layout)
 
+        use_defaults_check.setToolTip("勾选后将使用系统设置中的默认浏览器参数。")
+        headless_check.setToolTip("无头模式不会显示浏览器窗口。")
+        user_data_input.setToolTip("Chrome 用户数据目录，可复用登录态。")
+        profile_input.setToolTip("Profile 目录，例如：Default 或 Profile 1。")
+
         def toggle_fields(checked: bool) -> None:
             headless_check.setEnabled(not checked)
             user_data_input.setEnabled(not checked)
@@ -448,7 +470,7 @@ class StepEditorDialog(QDialog):
         y_input.setValue(y)
         hint_label.setText(f"已选择坐标：({x}, {y})")
         self._capture_targets = None
-        self.show()
+        self.showNormal()
         self.raise_()
         self.activateWindow()
 
