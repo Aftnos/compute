@@ -5,7 +5,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from app.actions import create_action
-from app.logging import RunLogger
+from app.loggers import RunLogger
 from app.models import Flow
 
 

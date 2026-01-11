@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.engine import RunnerThread
-from app.logging import RunLogger
+from app.loggers import RunLogger
 from app.models import Flow
 from app.storage import load_flows
 from app.triggers import HotkeyManager, SchedulerManager
