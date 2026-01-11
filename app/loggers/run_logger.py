@@ -23,7 +23,7 @@ class RunRecord:
     flow_id: str
     flow_name: str
     trigger: str
-    status: str = "running"
+    status: str = "运行中"
     started_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     finished_at: Optional[str] = None
     step_logs: List[StepLog] = field(default_factory=list)

@@ -1,1 +1,1 @@
-"""Windows desktop automation tool."""
+"""Windows 桌面自动化工具。"""

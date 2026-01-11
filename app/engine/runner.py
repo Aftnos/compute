@@ -26,22 +26,22 @@ class FlowRunner(QObject):
 
     def run(self) -> None:
         self._logger.start_run(self._flow.flow_id, self._flow.name, self._trigger)
-        status = "completed"
+        status = "已完成"
         for index, step in enumerate(self._flow.steps):
             if self._stop_requested:
-                status = "stopped"
+                status = "已停止"
                 break
             action = create_action(step)
             self.step_started.emit(index, step.action)
             self._logger.log_step_start(index, step.action, action.summary())
             try:
                 action.execute()
-                self._logger.log_step_finish(index, "success")
-                self.step_finished.emit(index, "success")
+                self._logger.log_step_finish(index, "成功")
+                self.step_finished.emit(index, "成功")
             except Exception as exc:  # noqa: BLE001
-                status = "failed"
-                self._logger.log_step_finish(index, "failed", error=str(exc))
-                self.step_finished.emit(index, "failed")
+                status = "失败"
+                self._logger.log_step_finish(index, "失败", error=str(exc))
+                self.step_finished.emit(index, "失败")
                 break
         self._logger.finish_run(status)
         self.run_finished.emit(status)

@@ -31,7 +31,7 @@ DEFAULT_HOTKEY = ["ctrl", "alt", "esc"]
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Windows Automation Tool")
+        self.setWindowTitle("Windows 自动化工具")
         self.resize(900, 600)
 
         self._flows: List[Flow] = []
@@ -46,11 +46,11 @@ class MainWindow(QMainWindow):
         self._log_view = QTextEdit()
         self._log_view.setReadOnly(True)
 
-        self._load_button = QPushButton("Load Flows")
-        self._run_button = QPushButton("Run Selected")
-        self._stop_button = QPushButton("Stop")
+        self._load_button = QPushButton("加载流程")
+        self._run_button = QPushButton("运行所选流程")
+        self._stop_button = QPushButton("停止")
 
-        self._status_label = QLabel("Ready")
+        self._status_label = QLabel("就绪")
 
         self._build_layout()
         self._bind_events()
@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout()
 
         left_panel = QVBoxLayout()
-        left_panel.addWidget(QLabel("Flows"))
+        left_panel.addWidget(QLabel("流程列表"))
         left_panel.addWidget(self._flows_list)
         left_panel.addWidget(self._load_button)
         left_panel.addWidget(self._run_button)
@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
         left_panel.addWidget(self._status_label)
 
         right_panel = QVBoxLayout()
-        right_panel.addWidget(QLabel("Run Log"))
+        right_panel.addWidget(QLabel("运行日志"))
         right_panel.addWidget(self._log_view)
 
         layout.addLayout(left_panel, 1)
@@ -96,10 +96,10 @@ class MainWindow(QMainWindow):
         try:
             self._hotkeys.register_hotkey("emergency_stop", DEFAULT_HOTKEY, self._stop_run)
         except ValueError:
-            QMessageBox.warning(self, "Hotkey Conflict", "Emergency stop hotkey conflict detected")
+            QMessageBox.warning(self, "热键冲突", "紧急停止热键发生冲突")
 
     def _load_flows(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Flow File", "", "JSON (*.json)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "打开流程文件", "", "JSON (*.json)")
         if not file_path:
             return
         self._hotkeys.stop()
@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, flow.flow_id)
             self._flows_list.addItem(item)
         self._register_flow_triggers()
-        self._status_label.setText(f"Loaded {len(self._flows)} flows")
+        self._status_label.setText(f"已加载 {len(self._flows)} 个流程")
 
     def _register_flow_triggers(self) -> None:
         for flow in self._flows:
@@ -126,7 +126,7 @@ class MainWindow(QMainWindow):
                         lambda flow=flow: self._run_flow(flow, trigger="hotkey"),
                     )
                 except ValueError:
-                    QMessageBox.warning(self, "Hotkey Conflict", f"Hotkey conflict for flow {flow.name}")
+                    QMessageBox.warning(self, "热键冲突", f"流程 {flow.name} 的热键发生冲突")
             if flow.schedule:
                 schedule_id = f"schedule:{flow.flow_id}"
                 if flow.schedule.schedule_type == "daily":
@@ -158,35 +158,35 @@ class MainWindow(QMainWindow):
     def _run_selected_flow(self) -> None:
         flow = self._selected_flow()
         if not flow:
-            QMessageBox.information(self, "No Flow", "Please select a flow to run")
+            QMessageBox.information(self, "未选择流程", "请先选择要运行的流程")
             return
         self._run_flow(flow, trigger="manual")
 
     def _run_flow(self, flow: Flow, trigger: str) -> None:
         if self._runner_thread and self._runner_thread.isRunning():
-            QMessageBox.warning(self, "Flow Running", "A flow is already running")
+            QMessageBox.warning(self, "流程正在运行", "已有流程正在运行，请先停止")
             return
         self._runner_thread = RunnerThread(flow, self._logger, trigger)
         self._runner_thread.runner.step_started.connect(self._on_step_started)
         self._runner_thread.runner.step_finished.connect(self._on_step_finished)
         self._runner_thread.runner.run_finished.connect(self._on_run_finished)
         self._runner_thread.start()
-        self._status_label.setText(f"Running {flow.name}...")
+        self._status_label.setText(f"正在运行 {flow.name}...")
 
     def _stop_run(self) -> None:
         if self._runner_thread and self._runner_thread.isRunning():
             self._runner_thread.runner.request_stop()
-            self._status_label.setText("Stop requested")
+            self._status_label.setText("已请求停止")
 
     def _on_step_started(self, index: int, action: str) -> None:
-        self._log_view.append(f"Step {index + 1} started: {action}")
+        self._log_view.append(f"步骤 {index + 1} 开始：{action}")
 
     def _on_step_finished(self, index: int, status: str) -> None:
-        self._log_view.append(f"Step {index + 1} finished: {status}")
+        self._log_view.append(f"步骤 {index + 1} 结束：{status}")
 
     def _on_run_finished(self, status: str) -> None:
-        self._log_view.append(f"Run finished with status: {status}")
-        self._status_label.setText(f"Run {status}")
+        self._log_view.append(f"运行结束，状态：{status}")
+        self._status_label.setText(f"运行状态：{status}")
 
 
 def run_app() -> None:
