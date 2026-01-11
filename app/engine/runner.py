@@ -4,7 +4,8 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from app.actions import create_action
+from app.actions import ActionContext, create_action
+from app.actions.browser import BrowserController
 from app.loggers import RunLogger
 from app.models import Flow
 
@@ -25,24 +26,29 @@ class FlowRunner(QObject):
         self._stop_requested = True
 
     def run(self) -> None:
+        context = ActionContext(require_window_focus=self._flow.require_window_focus, browser=BrowserController())
         self._logger.start_run(self._flow.flow_id, self._flow.name, self._trigger)
         status = "已完成"
-        for index, step in enumerate(self._flow.steps):
-            if self._stop_requested:
-                status = "已停止"
-                break
-            action = create_action(step)
-            self.step_started.emit(index, step.action)
-            self._logger.log_step_start(index, step.action, action.summary())
-            try:
-                action.execute()
-                self._logger.log_step_finish(index, "成功")
-                self.step_finished.emit(index, "成功")
-            except Exception as exc:  # noqa: BLE001
-                status = "失败"
-                self._logger.log_step_finish(index, "失败", error=str(exc))
-                self.step_finished.emit(index, "失败")
-                break
+        try:
+            for index, step in enumerate(self._flow.steps):
+                if self._stop_requested:
+                    status = "已停止"
+                    break
+                action = create_action(step)
+                self.step_started.emit(index, step.action)
+                self._logger.log_step_start(index, step.action, action.summary())
+                try:
+                    action.execute(context)
+                    self._logger.log_step_finish(index, "成功")
+                    self.step_finished.emit(index, "成功")
+                except Exception as exc:  # noqa: BLE001
+                    status = "失败"
+                    self._logger.log_step_finish(index, "失败", error=str(exc))
+                    self.step_finished.emit(index, "失败")
+                    break
+        finally:
+            if context.browser:
+                context.browser.shutdown()
         self._logger.finish_run(status)
         self.run_finished.emit(status)
 

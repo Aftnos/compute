@@ -11,6 +11,14 @@ StepType = Literal[
     "scroll",
     "wait",
     "focus_window",
+    "move_mouse",
+    "drag_mouse",
+    "browser_open",
+    "browser_click",
+    "browser_type",
+    "browser_wait",
+    "browser_press",
+    "browser_close",
 ]
 
 
