@@ -69,9 +69,10 @@ def create_action(step: Step) -> Action:
     if step.action == "browser_open":
         return BrowserOpenAction(
             url=str(params.get("url", "")),
-            headless=bool(params.get("headless", False)),
+            headless=params.get("headless"),
             user_data_dir=params.get("user_data_dir"),
             profile_dir=params.get("profile_dir"),
+            use_defaults=bool(params.get("use_defaults", True)),
         )
     if step.action == "browser_click":
         return BrowserClickAction(

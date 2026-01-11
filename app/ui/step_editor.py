@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal, QObject
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,11 +19,40 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from pynput import mouse
+
 from app.models import Step
 
 
 ActionGetter = Callable[[], Dict[str, Any]]
 ActionSetter = Callable[[Dict[str, Any]], None]
+
+
+class ClickCapture(QObject):
+    point_captured = pyqtSignal(int, int)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._listener: Optional[mouse.Listener] = None
+
+    def start(self) -> None:
+        if self._listener:
+            return
+
+        def on_click(x: int, y: int, button: mouse.Button, pressed: bool) -> Optional[bool]:
+            if pressed:
+                self.stop()
+                self.point_captured.emit(int(x), int(y))
+                return False
+            return None
+
+        self._listener = mouse.Listener(on_click=on_click)
+        self._listener.start()
+
+    def stop(self) -> None:
+        if self._listener:
+            self._listener.stop()
+            self._listener = None
 
 
 class StepEditorDialog(QDialog):
@@ -34,6 +63,9 @@ class StepEditorDialog(QDialog):
         self._action_combo = QComboBox()
         self._forms: Dict[str, tuple[QWidget, ActionGetter, ActionSetter]] = {}
         self._stack = QStackedWidget()
+        self._click_capture = ClickCapture()
+        self._click_capture.point_captured.connect(self._on_point_captured)
+        self._capture_targets: Optional[Tuple[QSpinBox, QSpinBox, QLabel]] = None
 
         self._build_forms()
         self._build_layout()
@@ -59,6 +91,10 @@ class StepEditorDialog(QDialog):
 
         self.setLayout(layout)
         self._action_combo.currentIndexChanged.connect(self._on_action_changed)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._click_capture.stop()
+        super().closeEvent(event)
 
     def _build_forms(self) -> None:
         self._add_form("type_text", "输入文本", self._build_type_text_form())
@@ -181,11 +217,24 @@ class StepEditorDialog(QDialog):
         button_combo.addItem("中键", userData="middle")
         clicks_input = QSpinBox()
         clicks_input.setRange(1, 5)
+        capture_button = QPushButton("点击屏幕取点")
+        capture_hint = QLabel("点击按钮后在屏幕上选择坐标")
+        capture_hint.setWordWrap(True)
         layout.addRow("X 坐标", x_input)
         layout.addRow("Y 坐标", y_input)
         layout.addRow("按钮", button_combo)
         layout.addRow("点击次数", clicks_input)
+        layout.addRow(capture_button)
+        layout.addRow(capture_hint)
         widget.setLayout(layout)
+
+        def start_capture() -> None:
+            self._capture_targets = (x_input, y_input, capture_hint)
+            capture_hint.setText("请在屏幕上点击目标位置...")
+            self.hide()
+            self._click_capture.start()
+
+        capture_button.clicked.connect(start_capture)
 
         def getter() -> Dict[str, Any]:
             return {
@@ -352,30 +401,56 @@ class StepEditorDialog(QDialog):
         widget = QWidget()
         layout = QFormLayout()
         url_input = QLineEdit()
+        use_defaults_check = QCheckBox("使用全局浏览器设置")
+        use_defaults_check.setChecked(True)
         headless_check = QCheckBox("无头模式")
         user_data_input = QLineEdit()
         profile_input = QLineEdit()
         layout.addRow("网址", url_input)
+        layout.addRow(use_defaults_check)
         layout.addRow(headless_check)
         layout.addRow("用户数据目录", user_data_input)
         layout.addRow("Profile 目录", profile_input)
         widget.setLayout(layout)
 
+        def toggle_fields(checked: bool) -> None:
+            headless_check.setEnabled(not checked)
+            user_data_input.setEnabled(not checked)
+            profile_input.setEnabled(not checked)
+
+        toggle_fields(use_defaults_check.isChecked())
+        use_defaults_check.toggled.connect(toggle_fields)
+
         def getter() -> Dict[str, Any]:
             return {
                 "url": url_input.text().strip(),
-                "headless": headless_check.isChecked(),
-                "user_data_dir": user_data_input.text().strip() or None,
-                "profile_dir": profile_input.text().strip() or None,
+                "use_defaults": use_defaults_check.isChecked(),
+                "headless": None if use_defaults_check.isChecked() else headless_check.isChecked(),
+                "user_data_dir": None if use_defaults_check.isChecked() else user_data_input.text().strip() or None,
+                "profile_dir": None if use_defaults_check.isChecked() else profile_input.text().strip() or None,
             }
 
         def setter(params: Dict[str, Any]) -> None:
             url_input.setText(str(params.get("url", "")))
+            use_defaults_check.setChecked(bool(params.get("use_defaults", True)))
             headless_check.setChecked(bool(params.get("headless", False)))
             user_data_input.setText(str(params.get("user_data_dir", "") or ""))
             profile_input.setText(str(params.get("profile_dir", "") or ""))
+            toggle_fields(use_defaults_check.isChecked())
 
         return widget, getter, setter
+
+    def _on_point_captured(self, x: int, y: int) -> None:
+        if not self._capture_targets:
+            return
+        x_input, y_input, hint_label = self._capture_targets
+        x_input.setValue(x)
+        y_input.setValue(y)
+        hint_label.setText(f"已选择坐标：({x}, {y})")
+        self._capture_targets = None
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _build_browser_click_form(self) -> tuple[QWidget, ActionGetter, ActionSetter]:
         widget = QWidget()

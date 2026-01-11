@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.actions.browser import BrowserController
+    from app.actions.browser import BrowserOptions
 
 
 class Action(Protocol):
@@ -19,3 +20,5 @@ class Action(Protocol):
 class ActionContext:
     require_window_focus: bool = False
     browser: Optional["BrowserController"] = None
+    browser_defaults: Optional["BrowserOptions"] = None
+    close_browser_on_finish: bool = True

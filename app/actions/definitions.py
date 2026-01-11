@@ -149,18 +149,23 @@ class DragMouseAction(Action):
 @dataclass
 class BrowserOpenAction(Action):
     url: str
-    headless: bool = False
+    headless: Optional[bool] = None
     user_data_dir: Optional[str] = None
     profile_dir: Optional[str] = None
+    use_defaults: bool = True
 
     def execute(self, context: ActionContext) -> None:
         if not context.browser:
             raise RuntimeError("浏览器控制器未初始化。")
-        options = BrowserOptions(
-            headless=self.headless,
-            user_data_dir=self.user_data_dir,
-            profile_dir=self.profile_dir,
-        )
+        defaults = context.browser_defaults or BrowserOptions()
+        if self.use_defaults:
+            options = defaults
+        else:
+            options = BrowserOptions(
+                headless=defaults.headless if self.headless is None else self.headless,
+                user_data_dir=self.user_data_dir or defaults.user_data_dir,
+                profile_dir=self.profile_dir or defaults.profile_dir,
+            )
         context.browser.open_url(self.url, options)
 
     def summary(self) -> Dict[str, Any]:
@@ -169,6 +174,7 @@ class BrowserOpenAction(Action):
             "headless": self.headless,
             "user_data_dir": self.user_data_dir,
             "profile_dir": self.profile_dir,
+            "use_defaults": self.use_defaults,
         }
 
 
