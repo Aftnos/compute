@@ -1,0 +1,15 @@
+{
+  "log_path": "data/runs.jsonl",
+  "close_browser_on_finish": false,
+  "browser_headless": false,
+  "browser_user_data_dir": null,
+  "browser_profile_dir": null,
+  "startup_hotkey": [],
+  "emergency_hotkey": [
+    "ctrl",
+    "alt",
+    "q"
+  ],
+  "startup_schedule": null,
+  "startup_flow_ids": []
+}
