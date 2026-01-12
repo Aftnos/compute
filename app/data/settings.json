@@ -8,8 +8,9 @@
   "emergency_hotkey": [
     "ctrl",
     "alt",
-    "q"
+    "w"
   ],
   "startup_schedule": null,
-  "startup_flow_ids": []
+  "startup_flow_ids": [],
+  "last_flows_file": "C:\\Users\\alyfk\\Downloads\\2.json"
 }

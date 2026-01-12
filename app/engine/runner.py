@@ -93,5 +93,9 @@ class RunnerThread(QThread):
     def runner(self) -> FlowRunner:
         return self._runner
 
+    @property
+    def flow(self) -> Flow:
+        return self._runner._flow
+
     def run(self) -> None:
         self._runner.run()

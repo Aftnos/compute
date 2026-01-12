@@ -17,6 +17,7 @@ class AppSettings:
     emergency_hotkey: List[str] = field(default_factory=list)
     startup_schedule: Optional[ScheduleTrigger] = None
     startup_flow_ids: List[str] = field(default_factory=list)
+    last_flows_file: Optional[str] = None
 
     @staticmethod
     def from_dict(payload: Dict[str, Any]) -> "AppSettings":
@@ -37,6 +38,7 @@ class AppSettings:
             emergency_hotkey=list(payload.get("emergency_hotkey", [])),
             startup_schedule=schedule,
             startup_flow_ids=list(payload.get("startup_flow_ids", [])),
+            last_flows_file=payload.get("last_flows_file"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -55,4 +57,5 @@ class AppSettings:
             if self.startup_schedule
             else None,
             "startup_flow_ids": self.startup_flow_ids,
+            "last_flows_file": self.last_flows_file,
         }

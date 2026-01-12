@@ -39,9 +39,22 @@ class HotkeyManager:
             self._listener = None
         if not self._bindings:
             return
-        hotkeys = {"+".join(binding.keys): binding.callback for binding in self._bindings.values()}
+        
+        hotkeys = {}
+        for binding in self._bindings.values():
+            pynput_keys = "+".join(self._format_key(k) for k in binding.keys)
+            hotkeys[pynput_keys] = binding.callback
+            
         self._listener = keyboard.GlobalHotKeys(hotkeys)
         self._listener.start()
+
+    def _format_key(self, key: str) -> str:
+        key = key.lower()
+        if key == "win":
+            return "<cmd>"
+        if len(key) > 1:
+            return f"<{key}>"
+        return key
 
     def stop(self) -> None:
         if self._listener:
