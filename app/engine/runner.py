@@ -42,6 +42,7 @@ class FlowRunner(QObject):
             browser=self._browser_controller,
             browser_defaults=self._browser_defaults,
             close_browser_on_finish=self._close_browser_on_finish,
+            should_stop=lambda: self._stop_requested,
         )
         self._logger.start_run(self._flow.flow_id, self._flow.name, self._trigger)
         status = "已完成"

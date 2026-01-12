@@ -88,7 +88,15 @@ class WaitAction(Action):
     ms: int
 
     def execute(self, context: ActionContext) -> None:
-        time.sleep(self.ms / 1000.0)
+        # 分段等待，支持中断
+        remaining = self.ms / 1000.0
+        step = 0.1
+        while remaining > 0:
+            if context.should_stop():
+                return
+            sleep_time = min(remaining, step)
+            time.sleep(sleep_time)
+            remaining -= sleep_time
 
     def summary(self) -> Dict[str, Any]:
         return {"ms": self.ms}
@@ -222,7 +230,24 @@ class BrowserWaitAction(Action):
     def execute(self, context: ActionContext) -> None:
         if not context.browser:
             raise RuntimeError("浏览器控制器未初始化。")
-        context.browser.wait_selector(self.selector, timeout_s=self.timeout_s, by=self.by)
+        
+        # 轮询检查，支持中断
+        start_time = time.time()
+        while time.time() - start_time < self.timeout_s:
+            if context.should_stop():
+                return
+            try:
+                # 使用短超时进行尝试 (0.5s)
+                context.browser.wait_selector(self.selector, timeout_s=0.5, by=self.by)
+                return
+            except Exception:
+                # 忽略超时异常，继续尝试
+                pass
+        
+        # 最后一次尝试，如果失败则抛出异常
+        if context.should_stop():
+            return
+        context.browser.wait_selector(self.selector, timeout_s=0.5, by=self.by)
 
     def summary(self) -> Dict[str, Any]:
         return {"selector": self.selector, "by": self.by, "timeout_s": self.timeout_s}
