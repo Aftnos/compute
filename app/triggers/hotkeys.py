@@ -21,7 +21,15 @@ class HotkeyManager:
     def register_hotkey(self, name: str, keys: List[str], callback: Callable[[], None]) -> None:
         if self._is_conflict(keys):
             raise ValueError("检测到热键冲突")
-        self._bindings[name] = HotkeyBinding(name=name, keys=tuple(keys), callback=callback)
+        
+        def wrapped_callback() -> None:
+            print(f"DEBUG: Hotkey triggered: {name}")
+            try:
+                callback()
+            except Exception as e:
+                print(f"DEBUG: Error in hotkey callback {name}: {e}")
+
+        self._bindings[name] = HotkeyBinding(name=name, keys=tuple(keys), callback=wrapped_callback)
         self._refresh_listener()
 
     def unregister_hotkey(self, name: str) -> None:

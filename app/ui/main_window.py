@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import ctypes
+import sys
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -36,7 +39,7 @@ from PyQt6.QtWidgets import (
 from app.actions.browser import BrowserController, BrowserOptions
 from app.engine import RunnerThread
 from app.loggers import RunLogger
-from app.models import AppSettings, Flow, ScheduleTrigger, Step
+from app.models import AppSettings, Flow, ScheduleTrigger, Step, StartupTriggerConfig
 from app.storage import load_flows, load_settings, save_flows, save_settings
 from app.triggers import HotkeyManager, SchedulerManager
 from app.ui.step_editor import StepEditorDialog
@@ -44,7 +47,7 @@ from app.ui.tray_icon import SystemTrayIcon
 from app.ui.floating_window import FloatingWindow
 
 DEFAULT_HOTKEY = ["ctrl", "alt", "esc"]
-
+DEFAULT_FLOWS_PATH = Path("data") / "flows.json"
 
 class StartupTriggerDialog(QDialog):
     def __init__(
@@ -133,10 +136,21 @@ class StartupTriggerDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    run_flow_signal = pyqtSignal(object, str)
+    startup_flows_signal = pyqtSignal(object, str)
+    run_flow_sequence_signal = pyqtSignal(list, str)
+    stop_run_signal = pyqtSignal()
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Af自动化")
         self.resize(900, 600)
+
+        # Connect signals
+        self.run_flow_signal.connect(self._run_flow)
+        self.startup_flows_signal.connect(self._run_startup_flows)
+        self.run_flow_sequence_signal.connect(self._run_flow_sequence)
+        self.stop_run_signal.connect(self._stop_run)
 
         self._flows: List[Flow] = []
         self._runner_thread: Optional[RunnerThread] = None
@@ -160,13 +174,15 @@ class MainWindow(QMainWindow):
         self._flow_name_input.setPlaceholderText("请输入流程名称")
         self._steps_list = QListWidget()
         self._steps_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self._steps_list.model().rowsMoved.connect(self._on_steps_rows_moved)
 
         self._log_view = QTextEdit()
         self._log_view.setReadOnly(True)
 
-        self._load_button = QPushButton("加载流程")
-        self._save_button = QPushButton("保存流程")
         self._new_flow_button = QPushButton("新建流程")
+        self._import_button = QPushButton("导入流程")
+        self._export_button = QPushButton("导出流程")
+        self._save_button = QPushButton("保存流程")
         self._delete_flow_button = QPushButton("删除流程")
         self._add_step_button = QPushButton("添加步骤")
         self._edit_step_button = QPushButton("编辑步骤")
@@ -199,8 +215,16 @@ class MainWindow(QMainWindow):
         self._emergency_hotkey_input.setReadOnly(True)
         self._emergency_hotkey_set_button = QPushButton("设置热键")
         self._emergency_hotkey_add_button = QPushButton("重新录入")
+        self._hotkey_delay_input = QDoubleSpinBox()
+        self._hotkey_delay_input.setRange(0.0, 5.0)
+        self._hotkey_delay_input.setSingleStep(0.1)
+        self._hotkey_delay_input.setSuffix(" 秒")
+        self._hotkey_delay_input.setToolTip("热键触发后延迟执行的时间，防止修饰键干扰。默认0.5秒。")
         self._save_settings_button = QPushButton("保存设置")
 
+        self._flows_dirty = False
+        self._dirty_label = QLabel("")
+        self._dirty_label.setStyleSheet("color: #ff5c5c; font-weight: bold;")
         self._status_label = QLabel("就绪")
         
         self._tray_icon = SystemTrayIcon(self)
@@ -209,10 +233,34 @@ class MainWindow(QMainWindow):
         self._build_layout()
         self._bind_events()
         self._bind_tray_events()
-        self._load_settings_into_ui()
         self._register_emergency_hotkey()
-        self._apply_startup_triggers()
         self._load_last_flows()
+        if not self._flows:
+            QMessageBox.information(self, "未发现已保存流程", "未发现已保存的流程。请新建或导入流程后，点击保存。")
+        self._load_settings_into_ui()
+        self._apply_startup_triggers()
+        self._check_admin_privileges()
+        # 初始化时根据是否有选中流程设置编辑器状态
+        self._set_editor_enabled(self._selected_flow() is not None)
+        self._update_dirty_indicator()
+
+    def _check_admin_privileges(self) -> None:
+        try:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            is_admin = False
+            
+        if not is_admin:
+            self._status_label.setText("警告：未以管理员权限运行，全局热键可能在部分窗口失效。")
+            self._status_label.setStyleSheet("color: red; font-weight: bold;")
+            # 我们不在这里弹窗，以免阻塞启动，或者每次启动都弹窗太烦人。
+            # 仅仅显示在状态栏，并作为一个 SystemTray 消息通知
+            self._tray_icon.showMessage(
+                "权限警告",
+                "未检测到管理员权限。全局热键可能在部分高权限窗口下失效。",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000
+            )
 
     def _bind_tray_events(self) -> None:
         self._tray_icon.show_window_requested.connect(self._show_main_window)
@@ -264,6 +312,22 @@ class MainWindow(QMainWindow):
             # 最小化到托盘时，自动显示悬浮窗
             self._toggle_floating_window(True)
         elif reply.clickedButton() == exit_btn:
+            if self._flows_dirty:
+                confirm = QMessageBox(self)
+                confirm.setWindowTitle("未保存更改")
+                confirm.setText("当前流程有未保存更改，是否保存？")
+                save_btn = confirm.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
+                discard_btn = confirm.addButton("不保存", QMessageBox.ButtonRole.DestructiveRole)
+                confirm.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                confirm.exec()
+
+                if confirm.clickedButton() == save_btn:
+                    if not self._save_flows():
+                        event.ignore()
+                        return
+                elif confirm.clickedButton() != discard_btn:
+                    event.ignore()
+                    return
             event.accept()
             QApplication.instance().quit()
         else:
@@ -283,16 +347,19 @@ class MainWindow(QMainWindow):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(5)
         self._new_flow_button.setToolTip("新建流程")
-        self._load_button.setToolTip("加载流程文件")
-        self._save_button.setToolTip("保存当前流程")
+        self._import_button.setToolTip("从文件导入流程到当前列表")
+        self._export_button.setToolTip("将当前所有流程导出到文件")
+        self._save_button.setToolTip("保存当前流程到默认文件")
         # 可以用图标替代，这里暂时简化按钮文字
         self._new_flow_button.setText("新建")
-        self._load_button.setText("加载")
+        self._import_button.setText("导入")
+        self._export_button.setText("导出")
         self._save_button.setText("保存")
         
         toolbar.addWidget(self._new_flow_button)
-        toolbar.addWidget(self._load_button)
-        toolbar.addWidget(self._save_button)
+        toolbar.addWidget(self._import_button)
+        toolbar.addWidget(self._export_button)
+        # toolbar.addWidget(self._save_button) # Removed from toolbar
         left_panel.addLayout(toolbar)
 
         # 流程列表
@@ -309,19 +376,25 @@ class MainWindow(QMainWindow):
         
         self._run_button.setObjectName("RunButton")
         self._run_button.setText("▶ 运行流程")
-        self._run_button.setFixedHeight(40)
+        self._run_button.setFixedHeight(35)
         
         self._stop_button.setObjectName("StopButton")
         self._stop_button.setText("■ 停止运行")
-        self._stop_button.setFixedHeight(40)
+        self._stop_button.setFixedHeight(35)
         self._stop_button.setEnabled(False)  # 初始禁用停止按钮
 
+        # 运行和停止按钮并排
+        run_stop_layout = QHBoxLayout()
+        run_stop_layout.setSpacing(5)
+        run_stop_layout.addWidget(self._run_button)
+        run_stop_layout.addWidget(self._stop_button)
+
         bottom_actions.addWidget(self._delete_flow_button)
-        bottom_actions.addWidget(self._run_button)
-        bottom_actions.addWidget(self._stop_button)
+        bottom_actions.addLayout(run_stop_layout)
         
         left_panel.addLayout(bottom_actions)
         left_panel.addStretch()
+        left_panel.addWidget(self._dirty_label)
         left_panel.addWidget(self._status_label)
 
         left_widget = QWidget()
@@ -353,10 +426,18 @@ class MainWindow(QMainWindow):
         self._add_step_button.setFixedHeight(32)
         self._edit_step_button.setFixedHeight(32)
         self._remove_step_button.setFixedHeight(32)
+        self._save_button.setFixedHeight(32)
+        
         step_buttons.addWidget(self._add_step_button)
         step_buttons.addWidget(self._edit_step_button)
         step_buttons.addWidget(self._remove_step_button)
+        step_buttons.addStretch()
+        
+        self._save_button.setFixedWidth(100)
+        step_buttons.addWidget(self._save_button)
+        
         editor_layout.addLayout(step_buttons)
+        
         editor_panel.setLayout(editor_layout)
 
         # 2. 启动设置优化
@@ -439,7 +520,8 @@ class MainWindow(QMainWindow):
         emergency_hotkey_row.addWidget(self._emergency_hotkey_input)
         emergency_hotkey_row.addWidget(self._emergency_hotkey_set_button)
         emergency_hotkey_row.addWidget(self._emergency_hotkey_add_button)
-        hotkey_layout.addRow("热键设置:", emergency_hotkey_row)
+        hotkey_layout.addRow("紧急停止:", emergency_hotkey_row)
+        hotkey_layout.addRow("触发延迟:", self._hotkey_delay_input)
         hotkey_group.setLayout(hotkey_layout)
         
         settings_layout.addWidget(log_group)
@@ -488,7 +570,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(wrapper)
 
     def _bind_events(self) -> None:
-        self._load_button.clicked.connect(self._load_flows)
+        self._import_button.clicked.connect(self._import_flows)
+        self._export_button.clicked.connect(self._export_flows)
         self._save_button.clicked.connect(self._save_flows)
         self._new_flow_button.clicked.connect(self._create_flow)
         self._delete_flow_button.clicked.connect(self._delete_flow)
@@ -511,15 +594,18 @@ class MainWindow(QMainWindow):
         try:
             self._hotkeys.unregister_hotkey("emergency_stop")
             hotkey = self._settings.emergency_hotkey or DEFAULT_HOTKEY
-            self._hotkeys.register_hotkey("emergency_stop", hotkey, self._stop_run)
+            self._hotkeys.register_hotkey("emergency_stop", hotkey, lambda: self.stop_run_signal.emit())
         except ValueError:
             QMessageBox.warning(self, "热键冲突", "紧急停止热键发生冲突")
 
     def _load_last_flows(self) -> None:
-        if self._settings.last_flows_file:
-            path = Path(self._settings.last_flows_file)
-            if path.exists():
-                self._load_flows_from_path(path)
+        path = DEFAULT_FLOWS_PATH
+        if not path.exists() and self._settings.last_flows_file:
+            legacy_path = Path(self._settings.last_flows_file)
+            if legacy_path.exists():
+                path = legacy_path
+        if path.exists():
+            self._load_flows_from_path(path)
 
     def _load_flows_from_path(self, path: Path) -> None:
         self._hotkeys.stop()
@@ -534,31 +620,102 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, flow.flow_id)
             self._flows_list.addItem(item)
         # self._refresh_startup_flow_list() # Removed
+        self._refresh_startup_triggers_list()
+        self._register_flow_triggers()
         self._status_label.setText(f"已加载 {len(self._flows)} 个流程")
+        self._mark_flows_dirty(False)
         if self._flows:
             self._flows_list.setCurrentRow(0)
 
-    def _load_flows(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(self, "打开流程文件", "", "JSON (*.json)")
-        if not file_path:
+    def _import_flows(self) -> None:
+        file_paths, _ = QFileDialog.getOpenFileNames(self, "导入流程文件", "", "JSON (*.json)")
+        if not file_paths:
             return
-        path = Path(file_path)
-        self._load_flows_from_path(path)
-        # 更新并保存设置
-        self._settings.last_flows_file = str(path)
-        self._save_settings_silent()
+        
+        imported_count = 0
+        new_flows: List[Flow] = []
+        
+        for file_path in file_paths:
+            path = Path(file_path)
+            try:
+                flows = load_flows(path)
+                for flow in flows:
+                    # 为导入的流程生成新 ID 以避免冲突
+                    flow.flow_id = str(uuid4())
+                    # 可以在名字后加标记，或者保持原样
+                    # flow.name = f"{flow.name} (导入)" 
+                    
+                    self._flows.append(flow)
+                    new_flows.append(flow)
+                    
+                    item = QListWidgetItem(flow.name)
+                    item.setData(Qt.ItemDataRole.UserRole, flow.flow_id)
+                    self._flows_list.addItem(item)
+                    
+                    imported_count += 1
+            except Exception as e:
+                QMessageBox.warning(self, "导入失败", f"文件 {path.name} 导入失败: {e}")
+        
+        if imported_count > 0:
+            # 注册新流程的触发器
+            self._register_new_flows_triggers(new_flows)
+            self._status_label.setText(f"已导入 {imported_count} 个流程")
+            self._mark_flows_dirty(True)
 
-    def _save_flows(self) -> None:
-        self._persist_current_flow()
-        file_path, _ = QFileDialog.getSaveFileName(self, "保存流程文件", "", "JSON (*.json)")
+    def _register_new_flows_triggers(self, flows: List[Flow]) -> None:
+        for flow in flows:
+            if flow.hotkey:
+                try:
+                    self._hotkeys.register_hotkey(
+                        f"flow:{flow.flow_id}",
+                        flow.hotkey.keys,
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "hotkey"),
+                    )
+                except ValueError:
+                    QMessageBox.warning(self, "热键冲突", f"流程 {flow.name} 的热键发生冲突")
+            if flow.schedule:
+                schedule_id = f"schedule:{flow.flow_id}"
+                if flow.schedule.schedule_type == "daily":
+                    self._scheduler.schedule_daily(
+                        schedule_id,
+                        flow.schedule.expression,
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "schedule"),
+                    )
+                elif flow.schedule.schedule_type == "weekly":
+                    self._scheduler.schedule_weekly(
+                        schedule_id,
+                        flow.schedule.expression,
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "schedule"),
+                    )
+                elif flow.schedule.schedule_type == "cron":
+                    self._scheduler.schedule_cron(
+                        schedule_id,
+                        flow.schedule.expression,
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "schedule"),
+                    )
+
+    def _export_flows(self) -> None:
+        file_path, _ = QFileDialog.getSaveFileName(self, "导出流程文件", "", "JSON (*.json)")
         if not file_path:
             return
         path = Path(file_path)
         save_flows(path, self._flows)
+        QMessageBox.information(self, "导出成功", f"流程已导出到 {path.name}")
+
+    def _save_flows(self) -> bool:
+        self._persist_current_flow()
+        try:
+            if not DEFAULT_FLOWS_PATH.parent.exists():
+                DEFAULT_FLOWS_PATH.parent.mkdir(parents=True)
+            save_flows(DEFAULT_FLOWS_PATH, self._flows)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "保存失败", f"保存流程失败：{exc}")
+            return False
         self._status_label.setText("流程已保存")
-        # 更新并保存设置
-        self._settings.last_flows_file = str(path)
+        self._settings.last_flows_file = str(DEFAULT_FLOWS_PATH)
         self._save_settings_silent()
+        self._mark_flows_dirty(False)
+        return True
 
     def _save_settings_silent(self) -> None:
         # 保存设置但不更新 UI 和弹出提示，用于后台保存 last_flows_file
@@ -576,6 +733,7 @@ class MainWindow(QMainWindow):
         # self._refresh_startup_flow_list() # Removed
         self._flows_list.setCurrentItem(item)
         self._status_label.setText("已创建新流程")
+        self._mark_flows_dirty(True)
 
     def _delete_flow(self) -> None:
         flow = self._selected_flow()
@@ -599,6 +757,7 @@ class MainWindow(QMainWindow):
         
         self._clear_editor()
         self._status_label.setText("已删除流程")
+        self._mark_flows_dirty(True)
 
     def _register_flow_triggers(self) -> None:
         for flow in self._flows:
@@ -607,7 +766,7 @@ class MainWindow(QMainWindow):
                     self._hotkeys.register_hotkey(
                         f"flow:{flow.flow_id}",
                         flow.hotkey.keys,
-                        lambda flow=flow: self._run_flow(flow, trigger="hotkey"),
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "hotkey"),
                     )
                 except ValueError:
                     QMessageBox.warning(self, "热键冲突", f"流程 {flow.name} 的热键发生冲突")
@@ -617,19 +776,19 @@ class MainWindow(QMainWindow):
                     self._scheduler.schedule_daily(
                         schedule_id,
                         flow.schedule.expression,
-                        lambda flow=flow: self._run_flow(flow, trigger="schedule"),
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "schedule"),
                     )
                 if flow.schedule.schedule_type == "weekly":
                     self._scheduler.schedule_weekly(
                         schedule_id,
                         flow.schedule.expression,
-                        lambda flow=flow: self._run_flow(flow, trigger="schedule"),
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "schedule"),
                     )
                 if flow.schedule.schedule_type == "cron":
                     self._scheduler.schedule_cron(
                         schedule_id,
                         flow.schedule.expression,
-                        lambda flow=flow: self._run_flow(flow, trigger="schedule"),
+                        lambda flow=flow: self.run_flow_signal.emit(flow, "schedule"),
                     )
 
     def _selected_flow(self) -> Optional[Flow]:
@@ -705,7 +864,9 @@ class MainWindow(QMainWindow):
         flow = self._selected_flow()
         if not flow:
             self._clear_editor()
+            self._set_editor_enabled(False)
             return
+        self._set_editor_enabled(True)
         self._flow_name_input.setText(flow.name)
         self._steps_list.clear()
         for index, step in enumerate(flow.steps):
@@ -713,6 +874,14 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, step)
             self._steps_list.addItem(item)
         self._current_flow_id = flow.flow_id
+
+    def _set_editor_enabled(self, enabled: bool) -> None:
+        self._flow_name_input.setEnabled(enabled)
+        self._steps_list.setEnabled(enabled)
+        self._add_step_button.setEnabled(enabled)
+        self._edit_step_button.setEnabled(enabled)
+        self._remove_step_button.setEnabled(enabled)
+        self._save_button.setEnabled(enabled)
 
     def _format_step(self, step: Step, index: int) -> str:
         labels = {
@@ -785,6 +954,29 @@ class MainWindow(QMainWindow):
         self._flow_name_input.clear()
         self._steps_list.clear()
 
+    def _mark_flows_dirty(self, dirty: bool) -> None:
+        if self._flows_dirty == dirty:
+            return
+        self._flows_dirty = dirty
+        self._update_dirty_indicator()
+
+    def _update_dirty_indicator(self) -> None:
+        base_title = "Af自动化"
+        self.setWindowTitle(f"{base_title} *" if self._flows_dirty else base_title)
+        self._dirty_label.setText("流程未保存" if self._flows_dirty else "")
+
+    def _refresh_step_numbers(self) -> None:
+        for index in range(self._steps_list.count()):
+            item = self._steps_list.item(index)
+            step = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(step, Step):
+                item.setText(self._format_step(step, index + 1))
+
+    def _on_steps_rows_moved(self, *args) -> None:  # type: ignore[no-untyped-def]
+        self._refresh_step_numbers()
+        self._persist_current_flow()
+        self._mark_flows_dirty(True)
+
     def _persist_current_flow(self) -> None:
         if not self._current_flow_id:
             return
@@ -797,16 +989,22 @@ class MainWindow(QMainWindow):
             step = item.data(Qt.ItemDataRole.UserRole)
             if isinstance(step, Step):
                 steps.append(step)
-        flow.steps = steps
+        if flow.steps != steps:
+            flow.steps = steps
+            self._mark_flows_dirty(True)
 
     def _update_flow_name(self) -> None:
         flow = self._selected_flow()
         if not flow:
             return
-        flow.name = self._flow_name_input.text().strip() or flow.name
+        old_name = flow.name
+        new_name = self._flow_name_input.text().strip() or flow.name
+        flow.name = new_name
         item = self._flows_list.currentItem()
         if item:
             item.setText(flow.name)
+        if old_name != new_name:
+            self._mark_flows_dirty(True)
 
     def _add_step(self) -> None:
         flow = self._selected_flow()
@@ -822,6 +1020,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self._format_step(step, index))
             item.setData(Qt.ItemDataRole.UserRole, step)
             self._steps_list.addItem(item)
+            self._mark_flows_dirty(True)
 
     def _edit_step(self) -> None:
         item = self._steps_list.currentItem()
@@ -839,6 +1038,7 @@ class MainWindow(QMainWindow):
             current_row = self._steps_list.row(item)
             item.setText(self._format_step(new_step, current_row + 1))
             self._persist_current_flow()
+            self._mark_flows_dirty(True)
 
     def _remove_step(self) -> None:
         item = self._steps_list.currentItem()
@@ -850,6 +1050,7 @@ class MainWindow(QMainWindow):
         self._persist_current_flow()
         # 移除步骤后刷新整个列表以更新序号
         self._on_flow_selected()
+        self._mark_flows_dirty(True)
 
     def _load_settings_into_ui(self) -> None:
         self._log_path_input.setText(self._settings.log_path)
@@ -858,13 +1059,11 @@ class MainWindow(QMainWindow):
         self._browser_user_data_input.setText(self._settings.browser_user_data_dir or "")
         self._browser_profile_input.setText(self._settings.browser_profile_dir or "")
         self._emergency_hotkey_keys = list(self._settings.emergency_hotkey or DEFAULT_HOTKEY)
+        self._hotkey_delay_input.setValue(self._settings.hotkey_trigger_delay)
         self._update_hotkey_display()
         self._apply_tooltips()
         
-        # Load Triggers
-        self._startup_triggers_list.clear()
-        for trigger in self._settings.startup_triggers:
-            self._add_trigger_to_list(trigger)
+        self._refresh_startup_triggers_list()
             
         if self._settings.startup_schedule:
             index = self._startup_schedule_type.findData(
@@ -891,6 +1090,11 @@ class MainWindow(QMainWindow):
         item = QListWidgetItem(display_text)
         item.setData(Qt.ItemDataRole.UserRole, trigger)
         self._startup_triggers_list.addItem(item)
+    
+    def _refresh_startup_triggers_list(self) -> None:
+        self._startup_triggers_list.clear()
+        for trigger in self._settings.startup_triggers:
+            self._add_trigger_to_list(trigger)
 
     def _save_settings(self) -> None:
         self._settings = self._read_settings_from_ui()
@@ -915,12 +1119,23 @@ class MainWindow(QMainWindow):
             browser_headless=self._browser_headless_check.isChecked(),
             browser_user_data_dir=self._browser_user_data_input.text().strip() or None,
             browser_profile_dir=self._browser_profile_input.text().strip() or None,
-            startup_hotkey=list(self._startup_hotkey_keys),
+            startup_hotkey=self._settings.startup_hotkey,
             emergency_hotkey=list(self._emergency_hotkey_keys),
             startup_schedule=startup_schedule,
-            startup_flow_ids=self._collect_startup_flow_ids(),
+            startup_flow_ids=self._settings.startup_flow_ids,
+            startup_triggers=self._collect_startup_triggers(),
+            hotkey_trigger_delay=self._hotkey_delay_input.value(),
         )
         return settings
+
+    def _collect_startup_triggers(self) -> List[StartupTriggerConfig]:
+        triggers = []
+        for index in range(self._startup_triggers_list.count()):
+            item = self._startup_triggers_list.item(index)
+            trigger = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(trigger, StartupTriggerConfig):
+                triggers.append(trigger)
+        return triggers
 
     def _choose_log_path(self) -> None:
         file_path, _ = QFileDialog.getSaveFileName(self, "选择日志输出文件", "", "JSONL (*.jsonl);;所有文件 (*)")
@@ -929,8 +1144,9 @@ class MainWindow(QMainWindow):
 
     def _apply_startup_settings(self) -> None:
         self._settings = self._read_settings_from_ui()
+        save_settings(self._settings_path, self._settings)
         self._apply_startup_triggers()
-        self._status_label.setText("启动设置已应用")
+        self._status_label.setText("启动设置已保存并应用")
 
     def _apply_startup_triggers(self) -> None:
         # Clear old triggers (prefix based to be safe, but unregister_hotkey needs exact name)
@@ -960,7 +1176,7 @@ class MainWindow(QMainWindow):
                     self._hotkeys.register_hotkey(
                         f"startup_trigger_{index}",
                         trigger.hotkey,
-                        lambda t=trigger: self._run_startup_flows(t, trigger="startup_hotkey"),
+                        lambda t=trigger: self.startup_flows_signal.emit(t, "startup_hotkey"),
                     )
                 except ValueError:
                     # Ignore conflicts for now or log
@@ -997,7 +1213,7 @@ class MainWindow(QMainWindow):
             def run_schedule_flows():
                 flows = [f for f in self._flows if f.flow_id in flows_to_run]
                 if flows:
-                    self._run_flow_sequence(flows, "startup_schedule")
+                    self.run_flow_sequence_signal.emit(flows, "startup_schedule")
 
             if schedule.schedule_type == "daily":
                 self._scheduler.schedule_daily(schedule_id, schedule.expression, run_schedule_flows)
@@ -1082,15 +1298,13 @@ class MainWindow(QMainWindow):
 
     def _capture_hotkey(self, target: str, append: bool) -> None:
         current: List[str] = []
-        if append:
-            current = list(self._startup_hotkey_keys if target == "startup" else self._emergency_hotkey_keys)
+        if append and target == "emergency":
+            current = list(self._emergency_hotkey_keys)
         dialog = HotkeyCaptureDialog(current, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            if target == "startup":
-                self._startup_hotkey_keys = dialog.keys
-            else:
+            if target == "emergency":
                 self._emergency_hotkey_keys = dialog.keys
-            self._update_hotkey_display()
+                self._update_hotkey_display()
 
 
 class HotkeyCaptureDialog(QDialog):

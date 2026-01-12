@@ -23,6 +23,7 @@ class FlowRunner(QObject):
         browser_controller: BrowserController,
         browser_defaults: BrowserOptions,
         close_browser_on_finish: bool,
+        hotkey_trigger_delay: float = 0.5,
     ) -> None:
         super().__init__()
         self._flow = flow
@@ -31,12 +32,19 @@ class FlowRunner(QObject):
         self._browser_controller = browser_controller
         self._browser_defaults = browser_defaults
         self._close_browser_on_finish = close_browser_on_finish
+        self._hotkey_trigger_delay = hotkey_trigger_delay
         self._stop_requested = False
 
     def request_stop(self) -> None:
         self._stop_requested = True
 
     def run(self) -> None:
+        # 如果是通过热键触发，等待一小段时间以确保用户释放了物理按键
+        # 避免修饰键（如 Ctrl/Alt）干扰后续的键盘输入动作
+        if "hotkey" in self._trigger:
+            import time
+            time.sleep(0.5)
+
         context = ActionContext(
             require_window_focus=self._flow.require_window_focus,
             browser=self._browser_controller,
@@ -79,6 +87,7 @@ class RunnerThread(QThread):
         browser_controller: BrowserController,
         browser_defaults: BrowserOptions,
         close_browser_on_finish: bool,
+        hotkey_trigger_delay: float = 0.5,
     ) -> None:
         super().__init__()
         self._runner = FlowRunner(
@@ -88,6 +97,7 @@ class RunnerThread(QThread):
             browser_controller,
             browser_defaults,
             close_browser_on_finish,
+            hotkey_trigger_delay,
         )
 
     @property

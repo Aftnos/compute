@@ -24,6 +24,7 @@ class AppSettings:
     startup_schedule: Optional[ScheduleTrigger] = None
     startup_flow_ids: List[str] = field(default_factory=list)  # Deprecated
     startup_triggers: List[StartupTriggerConfig] = field(default_factory=list)
+    hotkey_trigger_delay: float = 0.5
     last_flows_file: Optional[str] = None
 
     @staticmethod
@@ -65,6 +66,7 @@ class AppSettings:
             startup_schedule=schedule,
             startup_flow_ids=old_flow_ids,
             startup_triggers=startup_triggers,
+            hotkey_trigger_delay=float(payload.get("hotkey_trigger_delay", 0.5)),
             last_flows_file=payload.get("last_flows_file"),
         )
 
@@ -88,5 +90,6 @@ class AppSettings:
                 {"hotkey": t.hotkey, "flow_ids": t.flow_ids}
                 for t in self.startup_triggers
             ],
+            "hotkey_trigger_delay": self.hotkey_trigger_delay,
             "last_flows_file": self.last_flows_file,
         }
